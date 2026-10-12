@@ -150,7 +150,21 @@ def build_screening_agent() -> Agent:
     #
     # Hint: Use temperature=0.0 for deterministic classification
     # ───────────────────────────────────────────────────────
-    pass  # Replace with your implementation
+    model = BedrockModel(
+        model_id=NOVA_LITE_MODEL,
+        region_name=AWS_REGION,
+        temperature=0.0
+    )
+
+    system_prompt = """
+    You are a content moderation agent using Nova Lite for fast screening of social media posts. Use screen_post tool to classify the post. Reply classification as SAFE, HARMFUL, or BORDERLINE, and the Confidence. Do not add any other commentary.
+    """
+    
+    return Agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=[screen_post]
+    )
 
 
 # ═══════════════════════════════════════════════════════
@@ -203,7 +217,21 @@ def build_review_agent() -> Agent:
     #
     # Hint: Use temperature=0.1 for analytical consistency
     # ───────────────────────────────────────────────────────
-    pass  # Replace with your implementation
+    model = BedrockModel(
+        model_id=CLAUDE_MODEL,
+        region_name=AWS_REGION,
+        temperature=0.0
+    )
+
+    system_prompt = """
+    You are a content moderation agent using Claude for deep review of borderline social media posts. Use deep_review_post tool to analyze the post. Do NOT add any other commentary, reply only in json raw.
+    """
+
+    return Agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=[deep_review_post]
+    )
 
 
 # ═══════════════════════════════════════════════════════
@@ -251,8 +279,21 @@ def build_notice_agent() -> Agent:
     #
     # Hint: Use temperature=0.3 for slightly creative communication
     # ───────────────────────────────────────────────────────
-    pass  # Replace with your implementation
+    model = BedrockModel(
+        model_id=NOVA_PRO_MODEL,
+        region_name=AWS_REGION,
+        temperature=0.3
+    )
 
+    system_prompt = """
+    You are a content moderation agent using Nova Pro to generate notices for posts that violated guidelines. Use generate_notice tool to create the notice. Do NOT add any other commentary, reply only in json raw.
+    """
+    
+    return Agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=[generate_notice]
+    )
 
 # ═══════════════════════════════════════════════════════
 #  MAIN  (fully provided — do not modify)
