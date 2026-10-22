@@ -329,7 +329,7 @@ def build_inventory_agent() -> Agent:
         Returns:
             Order status for particular order
         """
-        response = config.ORDERS_TABLE.get_item(Key={"order_id": order_id})
+        response = dynamodb.Table(config.ORDERS_TABLE).get_item(Key={"order_id": order_id, "customer_id": customer_id})
         item = response.get("Item")
         if not item:
             return {"error": f"Order {order_id} not found"}
@@ -356,7 +356,7 @@ def build_inventory_agent() -> Agent:
         Returns:
             Customer profile including tier and account details
         """
-        response = config.CUSTOMERS_TABLE.get_item(Key={"customer_id": customer_id})
+        response = dynamodb.Table(config.CUSTOMERS_TABLE).get_item(Key={"customer_id": customer_id})
         item = response.get("Item")
         if not item:
             return {"error": f"Customer {customer_id} not found"}
@@ -375,8 +375,7 @@ def build_inventory_agent() -> Agent:
         Returns:
             List of all orders with order_id, status, order_date, and amount
         """
-        response = config.ORDERS_TABLE.query(
-            IndexName="customer_id-index",  # adjust to your GSI name
+        response = dynamodb.Table(config.ORDERS_TABLE).query(
             KeyConditionExpression=Key("customer_id").eq(customer_id),
         )
         orders = [from_dynamo(i) for i in response.get("Items", [])]
@@ -465,7 +464,7 @@ def build_refund_agent() -> Agent:
         table = config.ORDERS_TABLE
         try:
             table.update_item(
-                Key={"order_id": order_id},
+                Key={"order_id": order_id, "customer_id": customer_id},
                 UpdateExpression="SET #s = :new_status, return_reference = :ref, return_reason = :reason",
                 ExpressionAttributeNames={"#s": "status"},
                 ExpressionAttributeValues={
@@ -537,9 +536,8 @@ def build_policy_agent() -> Agent:
                 "passages_found": len(passages),
                 "results": [
                     {
-                    "doc_id": p["documentId"], 
-                    "title": p.get("metadata", {}).get(
-            "_document_title"), 
+                    "text": p["text"], 
+                    "source": p["source"], 
                     "score": p["score"]}
                     for p in passages
                 ],
@@ -584,9 +582,8 @@ def build_policy_agent() -> Agent:
                 "passages_found": len(passages),
                 "results": [
                     {
-                    "doc_id": p["documentId"], 
-                    "title": p.get("metadata", {}).get(
-            "_document_title"), 
+                    "text": p["text"], 
+                    "source": p["source"], 
                     "score": p["score"]}
                     for p in passages
                 ],
@@ -632,7 +629,7 @@ def build_policy_agent() -> Agent:
                 "query": query,
                 "passages_found": len(passages),
                 "results": [
-                    {"doc_id": p["documentId"], "title": p.get("metadata", {}).get("_document_title"), "score": p["score"]}
+                    {"text": p["text"], "source": p["source"], "score": p["score"]}
                     for p in passages
                 ],
             }, indent=2)
@@ -1166,7 +1163,7 @@ def deploy_to_agentcore_runtime(
         description="NovaMart multi-agent customer-support runtime.",
         roleArn=config.AGENTCORE_ROLE_ARN,
         networkConfiguration={"networkMode": "PUBLIC"},
-        protocolConfiguration={"serverProtocol": "MCP"},
+        protocolConfiguration={"serverProtocol": "HTTP"},
         agentRuntimeArtifact={
             "codeConfiguration": {
                 "code": {"s3": {"bucket": config.POLICY_BUCKET, "prefix": artifact_key}},
@@ -1274,10 +1271,12 @@ def configure_observability(runtime_arn: str) -> None:
         },
         "xRayConfig": {"enabled": True, "samplingRate": 1.0},
     }
+    from agent_observability import apply_observability_config
     try:
-        from agent_observability import apply_observability_config
-
-        apply_observability_config(runtime_arn, logging_configuration)
+        apply_observability_config(
+            runtime_arn=runtime_id,
+            logging_configuration=logging_configuration
+        )
         print(f"CloudWatch logging enabled: {config.AGENT_LOG_GROUP}")
         print("X-Ray tracing enabled: 100% sampling")
     except Exception as e:
