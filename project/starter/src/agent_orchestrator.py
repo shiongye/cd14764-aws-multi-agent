@@ -848,14 +848,14 @@ def build_orchestrator_agent(
 
     # TODO: System prompt for the Orchestrator
     system_prompt = """
-    You are the Orchestrator Agent that manages the multi-agent workflow for customer support.
-    1. Call initialize_session at the start of each new session.
-    2. Route order-related requests to the Inventory Agent first.
-    3. Route policy questions to the Policy Agent.
-    4. Route return/refund requests to the Refund Agent after gathering order facts.
-    5. Route to the Communication Agent last to draft the final response.
-    6. Use the WorkflowState to track all findings and decisions.
-    7. Do NOT invent any facts or policy details.
+    You are the Orchestrator Agent for customer support. Always call
+    initialize_session first and route_to_communication_agent last; never write
+    the final customer response yourself. For order status, returns, or refunds,
+    call route_to_inventory_agent then route_to_refund_agent. For policy meaning
+    questions, call route_to_policy_agent. For account questions (including tier),
+    call route_to_inventory_agent and never PolicyAgent. Calculate math questions
+    directly without Inventory, Policy, or Refund agents. Do not invent facts or
+    policy details.
     """
 
     # TODO: Implement route_to_inventory_agent
@@ -873,7 +873,18 @@ def build_orchestrator_agent(
         Returns:
             Inventory facts retrieved by the InventoryAgent
         """
-        pass
+        trace.step_start("inventory_agent")
+        trace.agent_section("INVENTORY")
+        result = str(inventory_agent(
+            f"[Session ID: {session_id}] [Customer ID: {customer_id}] {request}"
+        ))
+        state = _read_workflow_state(session_id)
+        if not state:
+            return f"WorkflowState for session {session_id} not found"
+        version = int(state["version"])
+        _update_workflow_state(session_id, {"inventory_agent": result}, version)
+        trace.step_done("inventory_agent", version)
+        return result
 
     # TODO: Implement route_to_policy_agent
     @tool
@@ -889,7 +900,16 @@ def build_orchestrator_agent(
         Returns:
             Policy information retrieved and synthesized by PolicyAgent
         """
-        pass
+        trace.step_start("policy_agent")
+        trace.agent_section("POLICY")
+        result = str(policy_agent(request))
+        state = _read_workflow_state(session_id)
+        if not state:
+            return f"WorkflowState for session {session_id} not found"
+        version = int(state["version"])
+        _update_workflow_state(session_id, {"policy_agent": result}, version)
+        trace.step_done("policy_agent", version)
+        return result
 
     # TODO: Implement route_to_refund_agent
     @tool
@@ -906,7 +926,18 @@ def build_orchestrator_agent(
         Returns:
             Refund decision from the RefundAgent
         """
-        pass
+        trace.step_start("refund_agent")
+        trace.agent_section("REFUND")
+        result = str(refund_agent(
+            f"[Session ID: {session_id}] [Customer ID: {customer_id}] {request}"
+        ))
+        state = _read_workflow_state(session_id)
+        if not state:
+            return f"WorkflowState for session {session_id} not found"
+        version = int(state["version"])
+        _update_workflow_state(session_id, {"refund_agent": result}, version)
+        trace.step_done("refund_agent", version)
+        return result
 
     # TODO: Implement route_to_communication_agent
     @tool
@@ -924,7 +955,19 @@ def build_orchestrator_agent(
         Returns:
             Final customer-facing response drafted by CommunicationAgent
         """
-        return build_communication_agent()
+        trace.step_start("communication_agent")
+        trace.agent_section("COMMUNICATION")
+        result = str(communication_agent(
+            f"[Session ID: {session_id}] [Customer ID: {customer_id}] "
+            f"Original request: {original_request}"
+        ))
+        state = _read_workflow_state(session_id)
+        if not state:
+            return f"WorkflowState for session {session_id} not found"
+        version = int(state["version"])
+        _update_workflow_state(session_id, {"communication_agent": result}, version)
+        trace.step_done("communication_agent", version)
+        return result
 
     # TODO: Implement initialize_session
     @tool
@@ -940,11 +983,22 @@ def build_orchestrator_agent(
         Returns:
             Confirmation that the session was initialized
         """
-        _create_workflow_state(session_id, customer_id)
+        if not _read_workflow_state(session_id):
+            _create_workflow_state(session_id, customer_id)
         return f"Session {session_id} initialized for customer {customer_id}."
 
     # TODO: Instantiate and return the OrchestratorAgent
-    pass
+    return Agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=[
+            initialize_session,
+            route_to_inventory_agent,
+            route_to_policy_agent,
+            route_to_refund_agent,
+            route_to_communication_agent,
+        ],
+    )
 
 
 # ═══════════════════════════════════════════════════════
@@ -970,6 +1024,10 @@ def create_guardrail() -> tuple[str, str]:
             for v in versions.get('guardrails', []):
                 if v.get('version', 'DRAFT') != 'DRAFT':
                     guardrail_version = v['version']
+            if guardrail_version == 'DRAFT':
+                guardrail_version = bedrock_client.create_guardrail_version(
+                    guardrailIdentifier=guardrail_id
+                )['version']
             print(f"Guardrail already exists: {guardrail_id} (version: {guardrail_version})")
             return guardrail_id, guardrail_version
 
@@ -983,7 +1041,44 @@ def create_guardrail() -> tuple[str, str]:
 
     # Promote from DRAFT to a versioned guardrail using create_guardrail_version()
 
-    pass
+    response = bedrock_client.create_guardrail(
+        name=config.GUARDRAIL_NAME,
+        description="Safety controls for the NovaMart customer-support agent.",
+        contentPolicyConfig={"filtersConfig": [
+            {"type": kind, "inputStrength": strength, "outputStrength": strength}
+            for kind, strength in (
+                ("SEXUAL", "HIGH"), ("VIOLENCE", "HIGH"), ("HATE", "HIGH"),
+                ("INSULTS", "MEDIUM"), ("MISCONDUCT", "MEDIUM"),
+            )
+        ]},
+        sensitiveInformationPolicyConfig={"piiEntitiesConfig": [
+            {"type": "CREDIT_DEBIT_CARD_NUMBER", "action": "BLOCK"},
+            {"type": "US_SOCIAL_SECURITY_NUMBER", "action": "BLOCK"},
+            {"type": "EMAIL", "action": "ANONYMIZE"},
+            {"type": "PHONE", "action": "ANONYMIZE"},
+        ]},
+        topicPolicyConfig={
+            "tierConfig": {"tierName": "STANDARD"},
+            "topicsConfig": [
+                {"name": "competitor_products", "type": "DENY",
+                 "definition": "Requests about competitor products or services."},
+                {"name": "pricing_negotiations", "type": "DENY",
+                 "definition": "Haggling or requests to change an advertised price; arithmetic using an already specified price or discount is allowed."},
+                {"name": "legal_threats", "type": "DENY",
+                 "definition": "Legal threats, litigation, or requests for legal advice."},
+            ],
+        },
+        wordPolicyConfig={"managedWordListsConfig": [{"type": "PROFANITY"}]},
+        crossRegionConfig={"guardrailProfileIdentifier": "us.guardrail.v1:0"},
+        blockedInputMessaging="I can't help with that request.",
+        blockedOutputsMessaging="I can't provide that response.",
+    )
+    guardrail_id = response["guardrailId"]
+    version = bedrock_client.create_guardrail_version(
+        guardrailIdentifier=guardrail_id
+    )["version"]
+    print(f"Guardrail created: {guardrail_id} (version: {version})")
+    return guardrail_id, version
 
 
 def deploy_to_agentcore_runtime(
@@ -1066,7 +1161,32 @@ def deploy_to_agentcore_runtime(
     # Note: guardrailConfiguration is injected automatically via the event hook above.
     # Return: response.get('agentRuntimeArn', response.get('arn', ''))
 
-    pass
+    response = agentcore_control.create_agent_runtime(
+        agentRuntimeName=runtime_name,
+        description="NovaMart multi-agent customer-support runtime.",
+        roleArn=config.AGENTCORE_ROLE_ARN,
+        networkConfiguration={"networkMode": "PUBLIC"},
+        protocolConfiguration={"serverProtocol": "MCP"},
+        agentRuntimeArtifact={
+            "codeConfiguration": {
+                "code": {"s3": {"bucket": config.POLICY_BUCKET, "prefix": artifact_key}},
+                "runtime": "PYTHON_3_12",
+                "entryPoint": ["main.py"],
+            }
+        },
+        environmentVariables={
+            "AWS_REGION": config.AWS_REGION,
+            "PROJECT_NAME": config.PROJECT_NAME,
+            "RETURNS_KB_ID": config.RETURNS_KB_ID,
+            "SHIPPING_KB_ID": config.SHIPPING_KB_ID,
+            "WARRANTY_KB_ID": config.WARRANTY_KB_ID,
+            "AGENT_LOG_GROUP": config.AGENT_LOG_GROUP,
+            "GUARDRAIL_ID": guardrail_id,
+            "GUARDRAIL_VERSION": guardrail_version,
+        },
+    )
+    return response.get("agentRuntimeArn", response.get("arn", ""))
+
 
 
 # ═══════════════════════════════════════════════════════
@@ -1096,7 +1216,30 @@ def configure_memory(runtime_arn: str) -> str:
     #   - memoryStrategies with summaryMemoryStrategy
     #   - clientToken for idempotency
 
-    pass
+    response = agentcore_control.create_memory(
+        name=memory_name,
+        description="Session summaries for NovaMart customer-support conversations.",
+        eventExpiryDuration=7,
+        memoryStrategies=[{
+            "summaryMemoryStrategy": {
+                "name": "SessionSummarizer",
+                "namespaceTemplates": ["/summaries/{actorId}/{sessionId}/"],
+            }
+        }],
+        clientToken=str(uuid.uuid4()),
+    )
+    memory = response["memory"]
+    memory_id = memory["id"]
+    deadline = time.time() + 300
+    while memory.get("status") != "ACTIVE":
+        if memory.get("status") == "FAILED":
+            raise RuntimeError(f"AgentCore Memory {memory_id} failed to create")
+        if time.time() >= deadline:
+            raise TimeoutError(f"AgentCore Memory {memory_id} did not become ACTIVE")
+        time.sleep(5)
+        memory = agentcore_control.get_memory(memoryId=memory_id)["memory"]
+    print(f"AgentCore Memory ready: {memory['arn']}")
+    return memory["arn"]
 
 
 # ═══════════════════════════════════════════════════════
@@ -1123,7 +1266,22 @@ def configure_observability(runtime_arn: str) -> None:
     # On success: print the CloudWatch log group and X-Ray sampling rate.
     # On exception: print "[Note] Logging config skipped (SDK version mismatch): <e>"
 
-    pass
+    logging_configuration = {
+        "cloudWatchConfig": {
+            "logGroupName": config.AGENT_LOG_GROUP,
+            "logLevel": "INFO",
+            "enabled": True,
+        },
+        "xRayConfig": {"enabled": True, "samplingRate": 1.0},
+    }
+    try:
+        from agent_observability import apply_observability_config
+
+        apply_observability_config(runtime_arn, logging_configuration)
+        print(f"CloudWatch logging enabled: {config.AGENT_LOG_GROUP}")
+        print("X-Ray tracing enabled: 100% sampling")
+    except Exception as e:
+        print(f"[Note] Logging config skipped (SDK version mismatch): {e}")
 
 
 # ═══════════════════════════════════════════════════════
