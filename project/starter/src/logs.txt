@@ -1,0 +1,13 @@
+Step 5/6: Configuring Observability...
+  Runtime environment written to agentcore/agentcore.json - applying with the AgentCore CLI
+  Running: agentcore deploy -y   (CLI 0.31.1, region us-east-1)
+✓ Load deployment target
+✓ Validate project
+✓ Sync CDK dependencies
+✓ Build CDK project
+✓ Synthesize CloudFormation
+✓ Check bootstrap status
+✓ Check stack status
+CDK deploy failed: AgentCore-udacity-default: SSM parameter /cdk-bootstrap/hnb659fds/version not found. Has the environment been bootstrapped? Please run 'cdk bootstrap' (see https://docs.aws.amazon.com/cdk/latest/guide/bootstrapping.html)
+Log: agentcore\.cli\logs\deploy\deploy-20261022-215402.log
+[Note] Logging config skipped (SDK version mismatch): agentcore deploy -y failed (exit 1)
