@@ -71,11 +71,12 @@ def retrieve_from_knowledge_base(
                 knowledgeBaseId=kb_id,
                 retrievalQuery={'text': query},
                 retrievalConfiguration={
-                    'vectorSearchConfiguration': {
+                    'managedSearchConfiguration': {
                         'numberOfResults': top_k
                     }
                 }
             )
+            import json
         except Exception as exc:
             # Surface the error as structured text so the calling agent can report it
             return [{
